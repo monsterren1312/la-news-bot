@@ -29,7 +29,9 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]          # например -1001234567890 или @channelusername
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 
-MAX_POSTS_PER_RUN = int(os.environ.get("MAX_POSTS_PER_RUN", "2"))
+MAX_POSTS_PER_RUN = int(os.environ.get("MAX_POSTS_PER_RUN", "1"))
+MIN_INTERVAL_MINUTES = int(os.environ.get("MIN_INTERVAL_MINUTES", "15"))
+MAX_INTERVAL_MINUTES = int(os.environ.get("MAX_INTERVAL_MINUTES", "45"))
 STATE_FILE = os.environ.get("STATE_FILE", "state/seen.json")
 
 CHANNEL_SIGNATURE = "🇺🇸 LA News"

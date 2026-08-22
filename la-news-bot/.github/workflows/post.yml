@@ -1,0 +1,43 @@
+name: LA News Autoposter
+
+on:
+  schedule:
+    # Каждые 30 минут. GitHub Actions cron работает в UTC.
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}  # позволяет запускать вручную кнопкой на GitHub для теста
+
+# Разрешаем workflow коммитить обновлённый файл состояния (state/seen.json) обратно в репозиторий
+permissions:
+  contents: write
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CHANNEL_URL: ${{ secrets.CHANNEL_URL }}
+          MAX_POSTS_PER_RUN: "2"
+        run: python bot.py
+
+      - name: Commit updated state
+        run: |
+          git config user.name "la-news-bot"
+          git config user.email "actions@github.com"
+          git add state/seen.json || true
+          git diff --quiet --cached || git commit -m "Update seen state [skip ci]"
+          git push || true

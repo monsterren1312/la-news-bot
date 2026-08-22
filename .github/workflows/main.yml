@@ -3,7 +3,7 @@ name: LA News Autoposter
 on:
   schedule:
     # Каждые 30 минут. GitHub Actions cron работает в UTC.
-    - cron: "*/30 * * * *"
+     - cron: "*/15 * * * *"
   workflow_dispatch: {}  # позволяет запускать вручную кнопкой на GitHub для теста
 
 # Разрешаем workflow коммитить обновлённый файл состояния (state/seen.json) обратно в репозиторий

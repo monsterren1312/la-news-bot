@@ -31,7 +31,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CHANNEL_URL: ${{ secrets.CHANNEL_URL }}
-          MAX_POSTS_PER_RUN: "2"
+          MAX_POSTS_PER_RUN: "1"
         run: python bot.py
 
       - name: Commit updated state

@@ -10,6 +10,7 @@ LA News Telegram Bot
 import os
 import json
 import time
+import random
 import hashlib
 import logging
 from datetime import datetime, timezone
@@ -26,7 +27,7 @@ log = logging.getLogger("la-news-bot")
 # ---------------------------------------------------------------------------
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]          # например -1001234567890 или @channelusername
+TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 
 MAX_POSTS_PER_RUN = int(os.environ.get("MAX_POSTS_PER_RUN", "1"))
@@ -35,9 +36,8 @@ MAX_INTERVAL_MINUTES = int(os.environ.get("MAX_INTERVAL_MINUTES", "45"))
 STATE_FILE = os.environ.get("STATE_FILE", "state/seen.json")
 
 CHANNEL_SIGNATURE = "🇺🇸 LA News"
-CHANNEL_URL = os.environ.get("CHANNEL_URL", "https://t.me/YOUR_CHANNEL_USERNAME")  # заменить на реальный
+CHANNEL_URL = os.environ.get("CHANNEL_URL", "https://t.me/YOUR_CHANNEL_USERNAME")
 
-# Источники — можно добавлять сколько угодно, каждый со своим именем.
 RSS_SOURCES = [
     {"name": "LA Times", "url": "https://www.latimes.com/local/rss2.0.xml"},
     {"name": "LAist", "url": "https://laist.com/rss-feed"},
@@ -50,40 +50,44 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
-# ---------------------------------------------------------------------------
-# Состояние (какие новости уже публиковали) — защита от повторов
-# ---------------------------------------------------------------------------
-
 def load_state() -> dict:
     if not os.path.exists(STATE_FILE):
-        return {"seen_hashes": [], "seen_links": []}
+        return {"seen_hashes": [], "seen_links": [], "next_post_not_before": None}
     with open(STATE_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+        state = json.load(f)
+        state.setdefault("next_post_not_before", None)
+        return state
 
 
 def save_state(state: dict) -> None:
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-    # Ограничиваем размер файла, чтобы он не рос бесконечно — храним последние 500 записей
     state["seen_hashes"] = state["seen_hashes"][-500:]
     state["seen_links"] = state["seen_links"][-500:]
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
+def schedule_next_post(state: dict) -> None:
+    delay_minutes = random.uniform(MIN_INTERVAL_MINUTES, MAX_INTERVAL_MINUTES)
+    next_time = datetime.now(timezone.utc).timestamp() + delay_minutes * 60
+    state["next_post_not_before"] = next_time
+    log.info(f"Следующий пост не раньше чем через {delay_minutes:.1f} мин")
+
+
+def is_too_early(state: dict) -> bool:
+    not_before = state.get("next_post_not_before")
+    if not_before is None:
+        return False
+    return datetime.now(timezone.utc).timestamp() < not_before
+
+
 def content_hash(title: str, summary: str) -> str:
-    """Хэш по смыслу заголовка+описания — помогает поймать дубли одной новости
-    из разных источников, а не только повторную публикацию одной и той же ссылки."""
     normalized = (title + summary).lower().strip()
     normalized = "".join(ch for ch in normalized if ch.isalnum() or ch.isspace())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-# ---------------------------------------------------------------------------
-# Сбор новостей из RSS
-# ---------------------------------------------------------------------------
-
 def fetch_candidates(state: dict) -> list[dict]:
-    """Собирает новые (ещё не публиковавшиеся) записи из всех источников."""
     candidates = []
 
     for source in RSS_SOURCES:
@@ -97,7 +101,7 @@ def fetch_candidates(state: dict) -> list[dict]:
             log.warning(f"Лента {source['name']} вернула ошибку без записей, пропускаю")
             continue
 
-        for entry in feed.entries[:10]:  # смотрим только последние 10 записей каждой ленты
+        for entry in feed.entries[:10]:
             link = entry.get("link", "")
             title = entry.get("title", "").strip()
             summary = entry.get("summary", "") or entry.get("description", "")
@@ -110,7 +114,7 @@ def fetch_candidates(state: dict) -> list[dict]:
 
             h = content_hash(title, summary)
             if h in state["seen_hashes"]:
-                continue  # похожая новость уже была (возможно, из другого источника)
+                continue
 
             image_url = extract_image(entry)
 
@@ -124,7 +128,6 @@ def fetch_candidates(state: dict) -> list[dict]:
                 "published": entry.get("published", ""),
             })
 
-    # Сортируем по дате публикации (если есть), самые свежие — первыми
     candidates.sort(key=lambda c: c["published"], reverse=True)
     return candidates
 
@@ -137,7 +140,6 @@ def strip_html(text: str) -> str:
 
 
 def extract_image(entry) -> str | None:
-    """Пытается найти картинку в записи RSS разными способами (зависит от формата ленты)."""
     if "media_content" in entry and entry.media_content:
         url = entry.media_content[0].get("url")
         if url:
@@ -158,14 +160,7 @@ def extract_image(entry) -> str | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Перевод и переписывание через Anthropic API
-# ---------------------------------------------------------------------------
-
 def rewrite_in_russian(title: str, summary: str, source_name: str) -> str | None:
-    """Просит Claude перевести и оформить новость на русском в нужном стиле.
-    Возвращает готовый текст поста БЕЗ подписи канала (её добавляем отдельно)."""
-
     prompt = f"""Ты редактор Telegram-канала новостей Лос-Анджелеса на русском языке.
 
 Вот новость на английском (источник: {source_name}):
@@ -196,10 +191,6 @@ def rewrite_in_russian(title: str, summary: str, source_name: str) -> str | None
         return None
 
 
-# ---------------------------------------------------------------------------
-# Публикация в Telegram
-# ---------------------------------------------------------------------------
-
 def build_final_text(body: str) -> str:
     signature = f"[{CHANNEL_SIGNATURE}]({CHANNEL_URL})"
     return f"{body}\n\n{signature}"
@@ -208,7 +199,6 @@ def build_final_text(body: str) -> str:
 def send_to_telegram(text: str, image_url: str | None) -> bool:
     try:
         if image_url:
-            # Сначала пробуем отправить с картинкой (по прямой ссылке)
             resp = requests.post(
                 f"{TELEGRAM_API}/sendPhoto",
                 data={
@@ -223,7 +213,6 @@ def send_to_telegram(text: str, image_url: str | None) -> bool:
                 return True
             log.warning(f"sendPhoto не удался ({resp.text[:200]}), пробую без картинки")
 
-        # Без картинки (либо она отсутствовала, либо не загрузилась)
         resp = requests.post(
             f"{TELEGRAM_API}/sendMessage",
             data={
@@ -244,13 +233,14 @@ def send_to_telegram(text: str, image_url: str | None) -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
-# Основной цикл
-# ---------------------------------------------------------------------------
-
 def main():
     log.info("Запуск LA News Bot")
     state = load_state()
+
+    if is_too_early(state):
+        remaining = (state["next_post_not_before"] - datetime.now(timezone.utc).timestamp()) / 60
+        log.info(f"Ещё не время для следующего поста (осталось ~{remaining:.1f} мин), завершение без публикации")
+        return
 
     candidates = fetch_candidates(state)
     log.info(f"Найдено {len(candidates)} новых кандидатов из {len(RSS_SOURCES)} источников")
@@ -279,9 +269,10 @@ def main():
             state["seen_links"].append(item["link"])
             state["seen_hashes"].append(item["hash"])
             posted += 1
-            save_state(state)  # сохраняем после каждого поста, чтобы не потерять прогресс при сбое
+            schedule_next_post(state)
+            save_state(state)
             if posted < MAX_POSTS_PER_RUN:
-                time.sleep(5)  # небольшая пауза между постами
+                time.sleep(5)
         else:
             log.error("Публикация не удалась, эта новость будет предложена повторно в следующий раз")
 

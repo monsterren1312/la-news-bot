@@ -31,8 +31,8 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 
 MAX_POSTS_PER_RUN = int(os.environ.get("MAX_POSTS_PER_RUN", "1"))
-MIN_INTERVAL_MINUTES = int(os.environ.get("MIN_INTERVAL_MINUTES", "15"))
-MAX_INTERVAL_MINUTES = int(os.environ.get("MAX_INTERVAL_MINUTES", "45"))
+MIN_INTERVAL_MINUTES = int(os.environ.get("MIN_INTERVAL_MINUTES", "60"))
+MAX_INTERVAL_MINUTES = int(os.environ.get("MAX_INTERVAL_MINUTES", "180"))
 STATE_FILE = os.environ.get("STATE_FILE", "state/seen.json")
 
 CHANNEL_SIGNATURE = "🇺🇸 LA News"
